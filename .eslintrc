@@ -1,0 +1,32 @@
+{
+  "root": true,
+  "parser": "@typescript-eslint/parser",
+  "plugins": [
+    "@typescript-eslint"
+  ],
+  "extends": [
+    "eslint:recommended",
+    "plugin:@typescript-eslint/eslint-recommended",
+    "plugin:@typescript-eslint/recommended"
+  ],
+  "rules": {
+    "indent": [
+      "warn",
+      4
+    ],
+    "semi": [
+      "warn",
+      "always"
+    ],
+    "@typescript-eslint/no-explicit-any": "off",
+    "comma-dangle": [
+      "warn",
+      "always-multiline"
+    ],
+    "quotes": [
+      "warn",
+      "double"
+    ],
+    "@typescript-eslint/no-non-null-assertion": "off"
+  }
+}

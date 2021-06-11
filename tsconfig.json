@@ -1,0 +1,10 @@
+{
+    "extends": "@tsconfig/recommended/tsconfig.json",
+    "compilerOptions": {
+        "noImplicitAny": false,
+        "resolveJsonModule": true
+    },
+    "files": [
+        "./client.ts"
+    ]
+}   
