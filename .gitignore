@@ -84,3 +84,4 @@ server/cert.pem
 server/cert.key
 server/users.json
 server/instructions.json
+client.js

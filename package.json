@@ -16,6 +16,7 @@
     "node-window-manager": "^2.2.4",
     "ps-node": "^0.1.6",
     "puppeteer-core": "^10.0.0",
+    "regedit": "^4.0.0",
     "robotjs": "github:SciencyScience/robotjs",
     "socket.io-client": "^4.1.2"
   },
