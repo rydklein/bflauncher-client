@@ -16,26 +16,9 @@ import regedit from "regedit";
 // Local Files
 import protocol from "./resources/protocol.json";
 const config = JSON.parse(fs.readFileSync("./config.json", {"encoding":"utf-8"}));
+import buildConfig from "./buildconfig/config.js";
 // Global Constants
-let controlServer = process.argv.find(e => e.startsWith("--server="));
-if (controlServer) {
-    controlServer = controlServer.split("=")[1];
-} else if (process.env["Seeder-ServerHost"]) {
-    controlServer = process.env["Seeder-ServerHost"];
-} else {
-    console.log("Please define a seeder server with --server=hostname:port OR set env variable Seeder-ServerHost to your server's hostname:port.");
-    process.exit(0);
-}
-let authToken = process.argv.find(e => e.startsWith("--authtoken="));
-if (authToken) {
-    authToken = authToken.split("=")[1];
-} else if (process.env["Seeder-AuthToken"]) {
-    authToken = process.env["Seeder-AuthToken"];
-} else {
-    console.log("Please specify your auth token with --authtoken=token OR set env variable Seeder-AuthToken.");
-    process.exit(0);
-}
-console.log(`Seeder Control Server set to ${controlServer}`);
+const {controlServer, authToken} = buildConfig.getConfig();
 // Global Variables
 let battlelog:Battlelog;
 let battlefieldOne:BattlefieldOne;
@@ -47,9 +30,11 @@ class OriginInterface extends EventEmitter {
     public originRunning = false;
     // If Origin is signed in to the proper account.
     public signedIn = false;
-    // Self-explanitory
+    // Self-explanatory
     public hasBF4 = false;
     public hasBF1 = false;
+    // Origin Username
+    public playerName!:string;
     // Whether user is connected to BF1 server.
     // Have to do some sketchy shit to get it though...
     public inBF1Game = false;
@@ -71,11 +56,15 @@ class OriginInterface extends EventEmitter {
             throw new Error("Error initializing Origin.");
         }
         // Get array of installed games
+        this.playerName = await evalCode(this.originDebugger, "Origin.user.originId()");
         await this.originDebugger.Runtime.evaluate({"expression":"window.Origin.client.games.requestGamesStatus().then((out) => {window.currentGames = out;})"});
         let installedGames;
         while(!installedGames) {
-            await wait(100);
-            installedGames = JSON.parse((await evalCode(this.originDebugger, "JSON.stringify(window.currentGames.updatedGames)")));
+            try {
+                installedGames = JSON.parse((await evalCode(this.originDebugger, "JSON.stringify(window.currentGames.updatedGames)")));
+            } catch {
+                await wait(100);
+            }
         }
         for (const game of installedGames) {
             if (OriginInterface.bf1OfferIds.includes(game.productId) && game.playable) this.hasBF1 = true;
@@ -98,7 +87,7 @@ class OriginInterface extends EventEmitter {
         }
         this.originRunning = false;
         // Launch it again!
-        this.originInstance = child_process.spawn(`${process.env["ProgramFiles(x86)"]}\\Origin\\Origin.exe`, ["--remote-debugging-port=8081"]);
+        this.originInstance = child_process.spawn(`${process.env["ProgramFiles(x86)"]}\\Origin\\Origin.exe`, ["-StartClientMinimized", "--remote-debugging-port=8081"]);
         this.originRunning = true;
         return;
     }
@@ -241,16 +230,14 @@ class ServerInterface extends EventEmitter {
         }});
         // Socket Handlers
         this.socket.on("connect", async () => {
-            this.newTargetHandler("BF4", await this.getTarget("BF4"));
-            this.newTargetHandler("BF1", await this.getTarget("BF1"));
             this.emit("connected");
+            this.initTargets();
         });
         this.socket.on("newTarget", this.newTargetHandler);
-        // Local Handlers
     }
-    private getTarget(game:bfGame):Promise<ServerData> {
+    private getTarget():Promise<Record<string, ServerData>> {
         return new Promise((resolve) => {
-            this.socket.emit("getTarget", game, (newTarget:ServerData) => {
+            this.socket.emit("getTarget", (newTarget:Record<string, ServerData>) => {
                 resolve(newTarget);
             });
         });
@@ -263,6 +250,11 @@ class ServerInterface extends EventEmitter {
     }
     public updateBF1State = (newOneState:OneState) => {
         this.socket.emit("oneStateUpdate", OneState[newOneState]);
+    }
+    public async initTargets() {
+        const initTargets = await this.getTarget();
+        this.newTargetHandler("BF4", initTargets["BF4"]);
+        this.newTargetHandler("BF1", initTargets["BF1"]);
     }
 }
 type ServerData = {
@@ -344,9 +336,9 @@ class Battlelog extends EventEmitter {
                 })).length === 0) {
                     resolve(false);
                 } else {
-                    resolve(true);
                     this.emit("loggedIn");
                     this.gameState = GameState.IDLE;
+                    resolve(true);
                 }
             });
         });
@@ -431,7 +423,7 @@ class BattlefieldOne extends EventEmitter {
         "user":"System",
         "timestamp":new Date().getTime(),
     }
-    private bf1Child: child_process.ChildProcess | null = null;
+    private bf1Window: nodeWindows.Window | null = null;
     private bf1Path!:string;
     private refreshInfoTimer;
     constructor() {
@@ -443,16 +435,19 @@ class BattlefieldOne extends EventEmitter {
         if (!newTarget.guid) {
             this.leaveServer();
         } else {
-            this.joinServerById(parseInt(newTarget.guid));
+            this.joinServerById(newTarget.guid);
         }
         this.currentTarget = newTarget;
-    } 
+    }
+    get target() {
+        return this.currentTarget;
+    }
     public async rejoinTarget() {
         if (!this.currentTarget.guid) {
             this.leaveServer();
             return;
         }
-        await this.joinServerById(parseInt(this.currentTarget.guid));
+        await this.joinServerById(this.currentTarget.guid);
     }
     public externalPlayingHandler = ((inGame:boolean) => {
         if (this.currentState !== OneState.ACTIVE) {
@@ -469,21 +464,16 @@ class BattlefieldOne extends EventEmitter {
     }).bind(this);
     public antiIdle = (async () => {
         if (this.currentState !== OneState.ACTIVE) return;
-        const windows:Array<nodeWindows.Window> = nodeWindows.windowManager.getWindows();
-        let bf1Window;
-        for (const window of windows) {
-            if (window.getTitle() === "Battlefield 1") {
-                bf1Window = window;
-                break;
-            }
-        }
-        if (!bf1Window) return;
-        bf1Window.restore();
-        bf1Window.bringToTop();
+
+        if (!this.bf1Window) return;
+        this.bf1Window.restore();
+        this.bf1Window.bringToTop();
         await wait(250);
         robot.keyTap("space");
         await wait(250);
-        bf1Window.minimize();
+        robot.keyTap("space");
+        await wait(250);
+        this.bf1Window.minimize();
         await wait(250);
         return;
     }).bind(this);
@@ -491,23 +481,41 @@ class BattlefieldOne extends EventEmitter {
         this.bf1Path = `${await BattlefieldOne.getBF1Dir()}\\bf1.exe`;
         this.emit("ready");
     }
-    private async joinServerById(gameId:number) {
+    private async joinServerById(gameId:string) {
+        if (this.currentState !== OneState.IDLE) {
+            await this.leaveServer();
+            await wait(1000);
+        }
         this.setState(OneState.LAUNCHING);
-        if (this.currentState !== OneState.IDLE) await this.leaveServer();
-        const launchArgs = ["-gameId", gameId.toString(), "-gameMode", "MP", "-role", "soldier", "-asSpectator", "false", "-parentSessinId", "-joinWithParty", "false"];
-        this.bf1Child = child_process.spawn(this.bf1Path, launchArgs);
-        this.bf1Child.once("exit", () => {
-            this.bf1Child = null;
-            this.setState(OneState.IDLE);
+        const launchArgs = ["-gameId", gameId, "-gameMode", "MP", "-role", "soldier", "-asSpectator", "false", "-parentSessinId", "-joinWithParty", "false"];
+        const bf1Child = child_process.spawn(this.bf1Path, launchArgs);
+        bf1Child.once("exit", async () => {
+            await wait(1000);
+            let bf1Window;
+            let i = 0;
+            while ((!bf1Window) && (i < 50)) {
+                const windows:Array<nodeWindows.Window> = nodeWindows.windowManager.getWindows();
+                await wait(500);
+                for (const window of windows) {
+                    if (window.getTitle() === "Battlefield™ 1") {
+                        bf1Window = window;
+                        break;
+                    }
+                }
+                i++;
+            }
+            if(!bf1Window) {
+                this.setState(OneState.IDLE);
+            }
+            this.bf1Window = bf1Window;
         });
     }
     private leaveServer() {
         return new Promise<void>((resolve) => {
-            if (!this.bf1Child) return;
-            Promise.race([waitForEvent(this.bf1Child, "exit"), wait(5000)]).then(() => {
-                resolve();
-            });
-            this.bf1Child.kill();
+            if (!this.bf1Window) return resolve();
+            process.kill(this.bf1Window.processId);
+            this.setState(OneState.IDLE);
+            resolve();
         });
     }
     private setState(newState:OneState) {
@@ -550,9 +558,11 @@ function waitForEvent(emitter:EventEmitter, eventName:string) {
 // #endregion
 async function main() {
     // Initialize OriginInterface and Battlelog (if needed)
+    console.log("Initializing Origin.");
     originInterface = new OriginInterface(config.email, config.password);
-    serverInterface = new ServerInterface(controlServer!, authToken!);
     await waitForEvent(originInterface, "ready");
+    serverInterface = new ServerInterface(controlServer!, authToken!);
+    await waitForEvent(serverInterface, "connected");
     if (originInterface.hasBF4) {
         console.log("[BF4] Initializing Battlelog.");
         battlelog = new Battlelog();
@@ -563,10 +573,6 @@ async function main() {
             loggedIn = await battlelog.login(config.email, config.password);
         }
         console.log("[BF4] Battlelog ready.");
-        // Initialize Gamestate (send to server)
-        serverInterface.on("connected", () => {
-            serverInterface.updateBF4State(battlelog.gameState);
-        });
         battlelog.on("gameStateChange", async (launcherEvent: LauncherEvent, lastGameState: GameState) => {
             console.log(`[BF4] ${GameState[lastGameState]} -> ${GameState[battlelog.gameState]}`);
             serverInterface.updateBF4State(battlelog.gameState);
@@ -583,34 +589,38 @@ async function main() {
             serverInterface.updateBF1State(battlefieldOne.currentState);
         });
         originInterface.on("bf1StatusChange", battlefieldOne.externalPlayingHandler);
-    }
-    serverInterface.on("newTarget", async (newGame:bfGame, newTarget:ServerData) => {
-        if((newGame === "BF4") && originInterface.hasBF4) {
-            // TODO: Move all of this logic into Battlelog, update it to use setter like BattlefieldOne
-            if(newTarget.guid === battlelog.currentTarget.guid) return;
-            // If the new GUID is null, disconnect (if we're not idle already)
-            if (!newTarget.guid) {
-                if (battlelog.gameState !== GameState.IDLE) {
-                    await battlelog.leaveServer();
-                    console.log(`[BF4] Instructed to disconnect by user ${newTarget.user} at ${new Date(newTarget.timestamp).toLocaleTimeString()}`);
+        serverInterface.on("newTarget", async (newGame:bfGame, newTarget:ServerData) => {
+            if((newGame === "BF4") && originInterface.hasBF4) {
+                serverInterface.updateBF4State(battlelog.gameState);
+                // TODO: Move all of this logic into Battlelog, update it to use setter like BattlefieldOne
+                if(newTarget.guid === battlelog.currentTarget.guid) return;
+                battlelog.currentTarget = newTarget;
+                // If the new GUID is null, disconnect (if we're not idle already)
+                if (!newTarget.guid) {
+                    if (battlelog.gameState !== GameState.IDLE) {
+                        await battlelog.leaveServer();
+                        console.log(`[BF4] Instructed to disconnect by user ${newTarget.user} at ${new Date(newTarget.timestamp).toLocaleTimeString()}`);
+                    }
+                    return;
                 }
-                return;
+                await battlelog.leaveServer();
+                await wait(250);
+                await battlelog.joinServer(newTarget.guid!);
+                console.log(`[BF4] New target set to:\n${newTarget.name}\n${newTarget.guid}\nBy: ${newTarget.user} at ${new Date(newTarget.timestamp).toLocaleTimeString()}`);
             }
-            await battlelog.leaveServer();
-            await wait(250);
-            await battlelog.joinServer(newTarget.guid!);
-            battlelog.currentTarget = newTarget;
-            console.log(`[BF4] New target set to:\n${newTarget.name}\n${newTarget.guid}\nBy: ${newTarget.user} at ${new Date(newTarget.timestamp).toLocaleTimeString()}`);
-        }
-        if (newGame === "BF1" && originInterface.hasBF1) {
-            battlefieldOne.target = newTarget;
-            if (newTarget.guid) {
-                console.log(`[BF1] New target set to:\n${newTarget.name}\n${newTarget.guid}\nBy: ${newTarget.user} at ${new Date(newTarget.timestamp).toLocaleTimeString()}`);
-            } else {
-                console.log(`[BF1] Instructed to disconnect by user ${newTarget.user} at ${new Date(newTarget.timestamp).toLocaleTimeString()}`);
+            if (newGame === "BF1" && originInterface.hasBF1) {
+                serverInterface.updateBF1State(battlefieldOne.currentState);
+                if (newTarget.guid === battlefieldOne.target.guid) return;
+                battlefieldOne.target = newTarget;
+                if (newTarget.guid) {
+                    console.log(`[BF1] New target set to:\n${newTarget.name}\n${newTarget.guid}\nBy: ${newTarget.user} at ${new Date(newTarget.timestamp).toLocaleTimeString()}`);
+                } else {
+                    console.log(`[BF1] Instructed to disconnect by user ${newTarget.user} at ${new Date(newTarget.timestamp).toLocaleTimeString()}`);
+                }
             }
-        }
-    });
+        });
+        serverInterface.initTargets();
+    }
     setInterval(async () => {
         if (originInterface.hasBF4) {
             await battlelog.antiIdle();
