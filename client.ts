@@ -12,7 +12,7 @@ import fetch from "node-fetch";
 import ps from "ps-node";
 import fs from "fs";
 import { io, Socket } from "socket.io-client";
-import regedit from "regedit";
+import winreg from "winreg";
 // Local Files
 import protocol from "./resources/protocol.json";
 const config = JSON.parse(fs.readFileSync("./config.json", {"encoding":"utf-8"}));
@@ -231,7 +231,6 @@ class ServerInterface extends EventEmitter {
         // Socket Handlers
         this.socket.on("connect", async () => {
             this.emit("connected");
-            this.initTargets();
         });
         this.socket.on("newTarget", this.newTargetHandler);
     }
@@ -424,13 +423,14 @@ class BattlefieldOne extends EventEmitter {
         "timestamp":new Date().getTime(),
     }
     private bf1Window: nodeWindows.Window | null = null;
-    private bf1Path!:string;
+    private bf1Path!: string;
     private refreshInfoTimer;
+    private firstAntiIdle = true;
     constructor() {
         super();
         this.init();
     }
-    set target(newTarget:ServerData) {
+    set target(newTarget: ServerData) {
         if ((this.currentTarget.guid === newTarget.guid)) return;
         if (!newTarget.guid) {
             this.leaveServer();
@@ -470,11 +470,17 @@ class BattlefieldOne extends EventEmitter {
         this.bf1Window.bringToTop();
         await wait(250);
         robot.keyTap("space");
-        await wait(250);
+        await wait(750);
+        if (this.firstAntiIdle) {
+            await wait(500);
+            robot.keyTap("space");
+            await wait(750);
+        }
         robot.keyTap("space");
         await wait(250);
         this.bf1Window.minimize();
         await wait(250);
+        this.firstAntiIdle = false;
         return;
     }).bind(this);
     private async init() { 
@@ -520,16 +526,22 @@ class BattlefieldOne extends EventEmitter {
     }
     private setState(newState:OneState) {
         if (newState === this.currentState) return;
+        this.firstAntiIdle = true;
         const oldState = this.currentState;
         this.currentState = newState;
         this.emit("newState", oldState);
     }
     // Private because it throws an err if BF1 isn't installed.
     private static async getBF1Dir():Promise<string> {
-        const bf1Reg = "HKLM\\SOFTWARE\\EA Games\\Battlefield 1";
-        return new Promise((res) => {
-            regedit.list(bf1Reg, function(err, result) {
-                res(result[bf1Reg].values["Install Dir"].value);
+        const bf1Reg = "\\SOFTWARE\\EA Games\\Battlefield 1";
+        return new Promise((resolve) => {
+            const regKey = new winreg({                                       
+                hive: winreg.HKLM,
+                key: bf1Reg,
+            });
+            regKey.values((err, items) => {
+                const bf1Dir = items.find(element => (element.name === "Install Dir"));
+                resolve(bf1Dir.value);
             });
         });
     }
@@ -561,6 +573,7 @@ async function main() {
     console.log("Initializing Origin.");
     originInterface = new OriginInterface(config.email, config.password);
     await waitForEvent(originInterface, "ready");
+    console.log("Initializing Server Interface.");
     serverInterface = new ServerInterface(controlServer!, authToken!);
     await waitForEvent(serverInterface, "connected");
     if (originInterface.hasBF4) {
