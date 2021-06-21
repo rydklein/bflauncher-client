@@ -57,18 +57,33 @@ class OriginInterface extends EventEmitter {
         }
         // Get array of installed games
         this.playerName = await evalCode(this.originDebugger, "Origin.user.originId()");
-        await this.originDebugger.Runtime.evaluate({"expression":"window.Origin.client.games.requestGamesStatus().then((out) => {window.currentGames = out;})"});
-        let installedGames;
-        while(!installedGames) {
+        // I'm so sorry to anyone reading this.
+        // Problem: Each version of the game has an OID for each region. That's a lot of OIDs to log.
+        // Solution:
+        const callbackHell = `
+        Origin.client.games.requestGamesStatus().then((out) => {
+            out.updatedGames.forEach((game, index) => {
+                Origin.games.catalogInfo(game.productId).then((catInfo) => {
+                    if ((catInfo.masterTitleId == ${OriginInterface.bf1MasterID}) && (game.playable)) {
+                        window.hasBF1 = true;
+                    }
+                    if ((catInfo.masterTitleId ==  ${OriginInterface.bf4MasterID}) && (game.playable)) {
+                        window.hasBF4 = true;
+                    }
+                        if (index == (out.updatedGames.length - 1)) window.gameChecksDone = true;
+                    });
+            });
+        });`;
+        await evalCode(this.originDebugger, callbackHell);
+        let gameChecksDone;
+        while(!gameChecksDone) {
             try {
-                installedGames = JSON.parse((await evalCode(this.originDebugger, "JSON.stringify(window.currentGames.updatedGames)")));
+                gameChecksDone = await evalCode(this.originDebugger, "window.gameChecksDone");
             } catch {
                 await wait(100);
             }
-        }
-        for (const game of installedGames) {
-            if (OriginInterface.bf1OfferIds.includes(game.productId) && game.playable) this.hasBF1 = true;
-            if (OriginInterface.bf4OfferIds.includes(game.productId) && game.playable) this.hasBF4 = true;
+            this.hasBF4 = await evalCode(this.originDebugger, "window.hasBF1") || false;
+            this.hasBF1 = await evalCode(this.originDebugger, "window.hasBF4") || false;
         }
         this.emit("ready");
         this.watchdogTimer = setInterval(this.originWatchdog, 30000);
@@ -214,8 +229,8 @@ class OriginInterface extends EventEmitter {
              });
          });
      }
-    static bf1OfferIds = ["Origin.OFR.50.0001662", "Origin.OFR.50.0001385", "Origin.OFR.50.0000557"];
-    static bf4OfferIds = ["OFB-EAST:109552316", "OFB-EAST:109549060", "OFB-EAST:109546867", "OFB-EAST:109552312"];
+    static bf4MasterID = "76889";
+    static bf1MasterID = "190132";
 }
 // #endregion
 // #region Comms
@@ -355,11 +370,11 @@ class Battlelog extends EventEmitter {
         if (!bf4Window) return;
         bf4Window.restore();
         bf4Window.bringToTop();
-        await wait(250);
+        await wait(1000);
         robot.keyTap("space");
-        await wait(250);
+        await wait(500);
         bf4Window.minimize();
-        await wait(250);
+        await wait(1000);
         return;
     }).bind(this);
     
@@ -464,22 +479,21 @@ class BattlefieldOne extends EventEmitter {
     }).bind(this);
     public antiIdle = (async () => {
         if (this.currentState !== OneState.ACTIVE) return;
-
         if (!this.bf1Window) return;
         this.bf1Window.restore();
         this.bf1Window.bringToTop();
-        await wait(250);
+        await wait(1000);
         robot.keyTap("space");
-        await wait(750);
+        await wait(1000);
         if (this.firstAntiIdle) {
-            await wait(500);
+            await wait(1000);
             robot.keyTap("space");
-            await wait(750);
+            await wait(1000);
         }
         robot.keyTap("space");
-        await wait(250);
+        await wait(1000);
         this.bf1Window.minimize();
-        await wait(250);
+        await wait(1000);
         this.firstAntiIdle = false;
         return;
     }).bind(this);
@@ -575,7 +589,9 @@ async function main() {
     await waitForEvent(originInterface, "ready");
     console.log("Initializing Server Interface.");
     serverInterface = new ServerInterface(controlServer!, authToken!);
-    await waitForEvent(serverInterface, "connected");
+    serverInterface.once("connected", () => {
+        console.log("Server Interface connected.");
+    });
     if (originInterface.hasBF4) {
         console.log("[BF4] Initializing Battlelog.");
         battlelog = new Battlelog();
@@ -632,6 +648,10 @@ async function main() {
                 }
             }
         });
+        serverInterface.on("connected", () => {
+            serverInterface.updateBF4State(battlelog.gameState);
+            serverInterface.updateBF1State(battlefieldOne.currentState);
+        });
         serverInterface.initTargets();
     }
     setInterval(async () => {
@@ -641,6 +661,6 @@ async function main() {
         if (originInterface.hasBF1) {
             await battlefieldOne.antiIdle();
         }
-    }, 30000);
+    }, 60000);
 }
 main();
