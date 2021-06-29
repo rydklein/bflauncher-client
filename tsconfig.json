@@ -5,6 +5,11 @@
         "resolveJsonModule": true
     },
     "files": [
-        "./client.ts"
+        "./client.ts",
+        "./modules/OriginInterface.ts",
+        "./modules/ServerInterface.ts",
+        "./modules/BattlefieldOne.ts",
+        "./modules/Battlelog.ts",
+        "./modules/util.ts"
     ]
 }   
