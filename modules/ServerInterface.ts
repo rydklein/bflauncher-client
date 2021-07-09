@@ -1,8 +1,7 @@
 import { hostname } from "os";
 import EventEmitter from "events";
 import { io, Socket } from "socket.io-client";
-import { OneState } from "./BattlefieldOne";
-import { GameState } from "./Battlelog";
+import { GameState } from "./OriginInterface";
 export default class ServerInterface extends EventEmitter {
     private socket:Socket;
     public currentGUID;
@@ -25,14 +24,11 @@ export default class ServerInterface extends EventEmitter {
             });
         });
     }
-    private newTargetHandler = (async (game:bfGame, newTarget:ServerData) => {
+    private newTargetHandler = (async (game:BFGame, newTarget:ServerData) => {
         this.emit("newTarget", game, newTarget);
     }).bind(this);
-    public updateBF4State = (newGameState:GameState):void => {
-        this.socket.emit("gameStateUpdate", GameState[newGameState]);
-    }
-    public updateBF1State = (newOneState:OneState):void => {
-        this.socket.emit("oneStateUpdate", OneState[newOneState]);
+    public updateState = (newGameState:GameState, game: BFGame):void => {
+        this.socket.emit("gameStateUpdate", game, GameState[newGameState]);
     }
     public async initTargets():Promise<void> {
         const initTargets = await this.getTarget();
@@ -46,4 +42,4 @@ export type ServerData = {
     "user":string,
     "timestamp":number
 }
-export type bfGame = "BF4" | "BF1";
+export type BFGame = "BF4" | "BF1";

@@ -21,7 +21,6 @@
       "warn",
       "always"
     ],
-    "@typescript-eslint/no-explicit-any": "off",
     "comma-dangle": [
       "warn",
       "always-multiline"
@@ -30,6 +29,7 @@
       "warn",
       "double"
     ],
+    "@typescript-eslint/no-explicit-any": "off",
     "@typescript-eslint/no-non-null-assertion": "off"
   }
 }

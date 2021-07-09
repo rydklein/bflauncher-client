@@ -8,8 +8,7 @@
         "./client.ts",
         "./modules/OriginInterface.ts",
         "./modules/ServerInterface.ts",
-        "./modules/BattlefieldOne.ts",
-        "./modules/Battlelog.ts",
+        "./modules/BFController.ts",
         "./modules/util.ts"
     ]
 }   

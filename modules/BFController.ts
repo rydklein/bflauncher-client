@@ -1,20 +1,23 @@
+import child_process from "child_process";
+import EventEmitter from "events";
+import fetch from "node-fetch";
 import * as nodeWindows from "node-window-manager";
 import * as robot from "robotjs";
-import EventEmitter from "events";
-import child_process from "child_process";
 import winreg from "winreg";
 import * as util from "./util";
-import { ServerData } from "./ServerInterface";
-export default class BattlefieldOne extends EventEmitter {
-    private currentState:OneState = OneState.IDLE;
+import { BFGame, ServerData } from "./ServerInterface";
+import { GameState } from "./OriginInterface";
+export default class BFController extends EventEmitter {
+    private game: BFGame;
+    private currentState:GameState = GameState.IDLE;
     private currentTarget:ServerData = {
         "name":null,
         "guid":null,
         "user":"System",
         "timestamp":new Date().getTime(),
     }
-    private bf1Window: nodeWindows.Window | null = null;
-    private bf1Path!: string;
+    private bfWindow: nodeWindows.Window | null = null;
+    private bfPath!: string;
     private refreshInfoTimer: number | null = null;
     private launchTimer: ReturnType<typeof setTimeout> | null = null;
     private firstAntiIdle = true;
@@ -24,25 +27,30 @@ export default class BattlefieldOne extends EventEmitter {
     }
     set target(newTarget: ServerData) {
         if ((this.currentTarget.guid === newTarget.guid)) return;
+        this.currentTarget = newTarget;
         if (!newTarget.guid) {
             this.leaveServer();
         } else {
             this.joinServerById(newTarget.guid);
         }
-        this.currentTarget = newTarget;
     }
     // State
-    get state():OneState {
+    get state():GameState {
         return this.currentState;
     }
-    set state(newState:OneState) {
+    set state(newState:GameState) {
         if (newState === this.state) return;
         this.firstAntiIdle = true;
         const oldState = this.currentState;
         this.currentState = newState;
         this.emit("newState", oldState);
         // Once game launches, set a timer to restart the connection process.
-        if (newState === OneState.LAUNCHING) {
+        // If the new state isn't joining, clear the failsafe timeout.
+        if (this.launchTimer) {
+            clearTimeout(this.launchTimer);
+            this.launchTimer = null;
+        }
+        if (newState === GameState.LAUNCHING) {
             if (this.launchTimer) {
                 clearTimeout(this.launchTimer);
                 this.launchTimer = null;
@@ -52,45 +60,42 @@ export default class BattlefieldOne extends EventEmitter {
                 this.joinServerById(this.currentTarget.guid);
             }, 60000);
         }
-        // If the new state isn't joining, clear the failsafe timeout.
-        if ((newState !== OneState.LAUNCHING) && this.launchTimer) {
-            clearTimeout(this.launchTimer);
-            this.launchTimer = null;
-        }
         // Detect unintentional disconnects & rejoin.
-        if (this.currentTarget.guid && (newState === OneState.DISCONNECTED)) {
+        if (this.currentTarget.guid && (newState === GameState.DISCONNECTED)) {
             this.joinServerById(this.currentTarget.guid);
             return;
         }
     }
-    constructor() {
+    constructor(currentGame: BFGame) {
         super();
+        this.game = currentGame;
         this.init();
     }
     public checkGame():void {
-        this.getBf1Window();
-        if ((!this.bf1Window) && (this.state !== OneState.LAUNCHING)) {
-            this.state = OneState.IDLE;
+        this.getbfWindow();
+        if ((!this.bfWindow) && (this.state !== GameState.LAUNCHING)) {
+            this.state = (this.currentTarget.guid === null) ? GameState.IDLE : GameState.DISCONNECTED;
             return;
         }
     }
-    private getBf1Window() {
-        let bf1Window:nodeWindows.Window | null = null;
+    private getbfWindow() {
+        let bfWindow:nodeWindows.Window | null = null;
         const windows:Array<nodeWindows.Window> = nodeWindows.windowManager.getWindows();
+        const gameTitle = (this.game === "BF4") ? "Battlefield 4" : "Battlefield™ 1";
         for (const window of windows) {
-            if (window.getTitle() === "Battlefield™ 1") {
-                bf1Window = window;
+            if (window.getTitle() === gameTitle) {
+                bfWindow = window;
                 break;
             }
         }
-        this.bf1Window = bf1Window;
+        this.bfWindow = bfWindow;
     }
     public antiIdle = (async () => {
-        if (this.currentState !== OneState.ACTIVE) return;
-        if (!this.bf1Window) this.getBf1Window();
-        if (!this.bf1Window) return;  
-        this.bf1Window.restore();
-        this.bf1Window.bringToTop();
+        if (this.currentState !== GameState.ACTIVE) return;
+        if (!this.bfWindow) this.getbfWindow();
+        if (!this.bfWindow) return;  
+        this.bfWindow.restore();
+        this.bfWindow.bringToTop();
         await util.wait(1000);
         robot.keyTap("space");
         await util.wait(1000);
@@ -101,48 +106,52 @@ export default class BattlefieldOne extends EventEmitter {
         }
         robot.keyTap("space");
         await util.wait(1000);
-        this.bf1Window.minimize();
+        this.bfWindow.minimize();
         await util.wait(1000);
         this.firstAntiIdle = false;
         return;
     }).bind(this);
     private async init() { 
-        this.bf1Path = `${await BattlefieldOne.getBF1Dir()}\\bf1.exe`;
+        this.bfPath = `${await BFController.getDir(this.game)}\\${this.game.toLowerCase()}.exe`;
         this.emit("ready");
     }
     private async joinServerById(gameId:string) {
-        if (this.currentState !== OneState.IDLE) {
+        let idToJoin = gameId;
+        if (this.game === "BF4") {
+            idToJoin = (await (await fetch(`https://keeper.battlelog.com/snapshot/${gameId}`)).json()).snapshot.gameId;
+        }
+        if (this.currentState !== GameState.IDLE) {
             await this.leaveServer();
             // Wait for Cloud Sync
             await util.wait(5000);
         }
-        const launchArgs = ["-gameId", gameId, "-gameMode", "MP", "-role", "soldier", "-asSpectator", "false", "-parentSessinId", "-joinWithParty", "false"];
-        child_process.spawn(this.bf1Path, launchArgs);
+        const launchArgs = ["-gameId", idToJoin, "-gameMode", "MP", "-role", "soldier", "-asSpectator", "false", "-parentSessinId", "-joinWithParty", "false", "-Origin_NoAppFocus"];
+        child_process.spawn(this.bfPath, launchArgs);
     }
     private leaveServer():boolean {
-        if (!this.bf1Window) this.getBf1Window();
-        if (!this.bf1Window) return false;
-        return process.kill(this.bf1Window.processId);
+        if (!this.bfWindow) this.getbfWindow();
+        if (!this.bfWindow) return false;
+        return process.kill(this.bfWindow.processId);
     }
     // Private because it throws an err if BF1 isn't installed.
-    private static async getBF1Dir():Promise<string> {
-        const bf1Reg = "\\SOFTWARE\\EA Games\\Battlefield 1";
+    private static async getDir(game: BFGame):Promise<string> {
+        let regEntry;
+        if (game === "BF4") {
+            regEntry =  "\\SOFTWARE\\EA Games\\Battlefield 4";
+        } else if (game === "BF1") {
+            regEntry =  "\\SOFTWARE\\EA Games\\Battlefield 1";
+        } else {
+            throw new Error("Game was not BFGame.");
+        }
         return new Promise((resolve) => {
             const regKey = new winreg({                                       
                 hive: winreg.HKLM,
-                key: bf1Reg,
+                key: regEntry,
             });
             regKey.values((err, items) => {
-                const bf1Dir = items.find(element => (element.name === "Install Dir"));
-                resolve(bf1Dir.value);
+                const bfDir = items.find(element => (element.name === "Install Dir"));
+                resolve(bfDir.value);
             });
         });
     }
-}
-export enum OneState {
-    "IDLE",
-    "LAUNCHING",
-    "JOINING",
-    "ACTIVE",
-    "DISCONNECTED"
 }

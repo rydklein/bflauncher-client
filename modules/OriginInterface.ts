@@ -4,7 +4,6 @@ import child_process from "child_process";
 import fetch from "node-fetch";
 import protocol from "../resources/protocol.json";
 import * as util from "./util";
-import { OneState } from "./BattlefieldOne";
 export default class OriginInterface extends EventEmitter {
     // If Origin is running AND accessable to the debugger.
     public originRunning = false;
@@ -17,7 +16,8 @@ export default class OriginInterface extends EventEmitter {
     public playerName!:string;
     // Whether user is connected to BF1 server.
     // Have to do some sketchy shit to get it though...
-    public originOneState:OneState = OneState.IDLE;
+    public originBF1State:GameState = GameState.IDLE;
+    public originBF4State:GameState = GameState.IDLE;
     // Private
     private email:string;
     private password:string;
@@ -155,77 +155,98 @@ export default class OriginInterface extends EventEmitter {
         return output.result.value;
     }
     // Timers
-     private originWatchdog = (async () => {
-         // If we're currently launching/initializing Origin, return.
-         if (!(this.signedIn && this.originRunning)) return;
-         let success = true;
-         try {
-             // Check if Origin's frozen using the magic link.
-             await fetch("http://127.0.0.1:3215/ping", { timeout: 1000 });
-         } catch (e) {
-             success = false;
-         }
-         if (!success) {
-             console.log("Origin hung. Relaunching...");
-             await this.restartOrigin();
-             await this.initOrigin();
-             return;
-         }
-     }).bind(this);
-     private statusPoller = (async () => {
-         let lastEvent;
-         let gameClosed;
-         try {
-             lastEvent = JSON.parse(await this.evalCode(this.originDebugger, "JSON.stringify(window.lastEvent)"));
-             gameClosed = JSON.parse(await this.evalCode(this.originDebugger, "JSON.stringify(window.gameClosed)")) || false;
-         } catch {
-             return;
-         }
-         // Reset gameClosed
-         const newActivity = lastEvent.gameActivity;
-         const oldOneState = this.originOneState;
-         if (!newActivity.joinable) {
-             switch (newActivity.richPresence) {
-                 case "": {
-                     this.originOneState = OneState.LAUNCHING;
-                     break;
-                 }
-                 case "In the menus": {
-                     if (!((oldOneState === OneState.IDLE) || (oldOneState === OneState.LAUNCHING))) {
-                         // If we go from non-idle to in-menu
-                         this.originOneState = OneState.DISCONNECTED;
-                     } else {
-                         // Otherwise, if we're going from idle to in-menu
-                         this.originOneState = OneState.LAUNCHING;
-                     }
-                     break;
-                 }
-             }
-         } else {
-             switch (newActivity.richPresence) {
-                 case "In the menus": {
-                     this.originOneState = OneState.JOINING;
-                     break;
-                 }
-                 default: {
-                     if (newActivity.richPresence.startsWith("MP:")) {
-                         this.originOneState = OneState.ACTIVE;
-                     } else {
-                         console.log("[OI] Unknown Presence Change.");
-                         console.dir(newActivity);
-                     }
-                 }
-             }
-         }
-         if (!(this.originOneState === oldOneState)) {
-             this.emit("bf1StatusChange");
-         }
-         if (gameClosed) {
-             this.emit("gameClosed");
-             await this.evalCode(this.originDebugger, "window.gameClosed = false");
-         }
-     }).bind(this)
+    private originWatchdog = (async () => {
+        // If we're currently launching/initializing Origin, return.
+        if (!(this.signedIn && this.originRunning)) return;
+        let success = true;
+        try {
+            // Check if Origin's frozen using the magic link.
+            await fetch("http://127.0.0.1:3215/ping", { timeout: 1000 });
+        } catch (e) {
+            success = false;
+        }
+        if (!success) {
+            console.log("Origin hung. Relaunching...");
+            await this.restartOrigin();
+            await this.initOrigin();
+            return;
+        }
+    }).bind(this);
+    private statusPoller = (async () => {
+        let lastEventBF1;
+        let lastEventBF4;
+        let gameClosed;
+        try {
+            lastEventBF1 = JSON.parse(await this.evalCode(this.originDebugger, "JSON.stringify(window.lastEventBF1)"));
+        } catch {
+            lastEventBF1 = null;
+        }
+        try {
+            lastEventBF4 = JSON.parse(await this.evalCode(this.originDebugger, "JSON.stringify(window.lastEventBF4)"));
+        } catch {
+            lastEventBF4 = null;
+        }
+        try {
+            gameClosed = JSON.parse(await this.evalCode(this.originDebugger, "JSON.stringify(window.gameClosed)")) || false;
+        } catch {
+            gameClosed = false;
+        }
+        // Reset gameClosed
+        const oldBF1State = this.originBF1State;
+        const oldBF4State = this.originBF4State;
+        if (lastEventBF1) {
+            this.originBF1State = OriginInterface.presenceToGameState(lastEventBF1.gameActivity, this.originBF1State);
+            if (!(this.originBF1State === oldBF1State)) {
+                this.emit("bf1StatusChange");
+            }
+        }
+        if (lastEventBF4) {
+            this.originBF4State = OriginInterface.presenceToGameState(lastEventBF4.gameActivity, this.originBF4State);
+            if (!(this.originBF4State === oldBF4State)) {
+                this.emit("bf4StatusChange");
+            }
+        }
+        if (gameClosed) {
+            this.emit("gameClosed");
+            await this.evalCode(this.originDebugger, "window.gameClosed = false");
+        }
+    }).bind(this)
     // Statics
+    // Disgusting switches to get states from presence updates
+    private static presenceToGameState = (newActivity: PresenceEvent, oldState: GameState) : GameState => {
+        if (!newActivity.joinable) {
+            switch (newActivity.richPresence) {
+                case "":
+                case "In the menus": {
+                    if (!((oldState === GameState.IDLE) || (oldState === GameState.LAUNCHING))) {
+                        // If we go from non-idle to in-menu
+                        return GameState.DISCONNECTED;
+                    } else {
+                        // Otherwise, if we're going from idle to in-menu
+                        return GameState.LAUNCHING;
+                    }
+                }
+            }
+        } else {
+            switch (newActivity.richPresence) {
+                case "In the menus": {
+                    return GameState.JOINING;
+                }
+                case "": {
+                    return oldState;
+                }
+                default: {
+                    if (newActivity.richPresence.startsWith("MP:") || newActivity.richPresence.startsWith("Multiplayer:") ) {
+                        return GameState.ACTIVE;
+                    } else {
+                        console.log("[OI] Unknown Presence Change.");
+                        console.dir(newActivity);
+                    }
+                }
+            }
+        }
+        return oldState;
+    }
     // Cursed Code
     static callbackHell = `
         function callbackHell() {
@@ -252,7 +273,28 @@ export default class OriginInterface extends EventEmitter {
             if ((gameEvent.gameActivity.title === "")) {
                 window.gameClosed = true;
             }
-            if (gameEvent.gameActivity.title !== "Battlefield™ 1") return;
-            window.lastEvent = JSON.parse(JSON.stringify(gameEvent));
+            if (gameEvent.gameActivity.title === "Battlefield™ 1") {
+                window.lastEventBF1 = JSON.parse(JSON.stringify(gameEvent));
+            }
+            if (gameEvent.gameActivity.title.startsWith("Battlefield 4™")) {
+                window.lastEventBF4 = JSON.parse(JSON.stringify(gameEvent));
+            }
         });`
+}
+export enum GameState {
+    "IDLE",
+    "LAUNCHING",
+    "JOINING",
+    "ACTIVE",
+    "DISCONNECTED"
+}
+interface PresenceEvent {
+    gamePresence: string;
+    joinable: boolean;
+    joinableInviteOnly: boolean;
+    multiplayerId: string;
+    productId: string;
+    richPresence: string;
+    title: string;
+    twitchPresence: string;
 }
