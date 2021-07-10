@@ -1,6 +1,5 @@
 // Packages
 import fs from "fs";
-const config = JSON.parse(fs.readFileSync("./config.json", {"encoding":"utf-8"}));
 import buildConfig from "./buildconfig/config.js";
 import * as util from "./modules/util";
 import OriginInterface, { GameState } from "./modules/OriginInterface";
@@ -13,16 +12,23 @@ let bfFour:BFController;
 let bfOne:BFController;
 let serverInterface:ServerInterface;
 let originInterface:OriginInterface;
+let config;
+try {
+    config = JSON.parse(fs.readFileSync("./config.json", {"encoding":"utf-8"}));
+} catch {
+    config = {};
+    console.log("[INIT] No config detected. You must manually log in to Origin.");
+}
 async function main() {
     // Initialize OriginInterface
-    console.log("Initializing Origin.");
-    originInterface = new OriginInterface(config.email, config.password);
+    console.log("[OI] Initializing Origin.");
+    originInterface = new OriginInterface((!!config.email), config.email, config.password);
     await util.waitForEvent(originInterface, "ready");
     // Initialize Server Interface
-    console.log("Initializing Server Interface.");
+    console.log("[SI] Initializing Server Interface.");
     serverInterface = new ServerInterface(controlServer!, authToken!);
-    serverInterface.once("connected", () => {
-        console.log("Server Interface connected.");
+    serverInterface.on("connected", () => {
+        console.log("[SI] Server Interface connected.");
     });
     if (originInterface.hasBF4) {
         console.log("[BF4] Initializing.");

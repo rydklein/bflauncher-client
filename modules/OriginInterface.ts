@@ -19,15 +19,17 @@ export default class OriginInterface extends EventEmitter {
     public originBF1State:GameState = GameState.IDLE;
     public originBF4State:GameState = GameState.IDLE;
     // Private
-    private email:string;
-    private password:string;
+    private email:string | null;
+    private password:string | null;
+    private shouldLogin:boolean;
     private originInstance!:child_process.ChildProcess;
     private originDebugger;
     private watchdogTimer;
-    constructor(email:string, password:string) {
+    constructor(logIn: boolean, email?:string, password?:string) {
         super();
-        this.email = email;
-        this.password = password;
+        this.email = email || null;
+        this.password = password || null;
+        this.shouldLogin = logIn;
         this.init();
     }
     private async init() {
@@ -51,6 +53,12 @@ export default class OriginInterface extends EventEmitter {
         this.emit("ready");
         this.watchdogTimer = setInterval(this.originWatchdog, 30000);
         setInterval(this.statusPoller, 1000);
+        // If we disconnect from Origin, restart it and reinitialize it.
+        this.originDebugger.once("disconnect", async () => {
+            console.log("[OI] Disconnected from Origin. Restarting...");
+            await this.restartOrigin();
+            await this.initOrigin();
+        });
     }
     // Bind this to function so that when called from a timer, we can still refer to this.
     private restartOrigin = async ():Promise<void> => {
@@ -109,28 +117,28 @@ export default class OriginInterface extends EventEmitter {
             const client = await CRI(debugOptionsProtocol);
             await client.Runtime.enable();
             await client.Page.enable();
-            console.log("Signing into Origin.");
-            // TODO: Add error handling. Too much work at the moment.
-            await this.evalCode(client, `document.getElementById('email').value = '${this.email}'`);
-            await this.evalCode(client, `document.getElementById('password').value = '${this.password}'`);
-            await this.evalCode(client, "document.getElementById('rememberMe').checked = true");
-            await util.wait(10);
-            // Resolve promise if the load event fires.
-            const loggedInPromise = new Promise<boolean>((resolve) => {
-                client.on("Page.loadEventFired", () => {
-                    resolve(true);
-                });
-            });
-            // If it's equal to 0, it worked. If not, uh oh.
-            this.evalCode(client, "document.getElementById('logInBtn').click()");
-            const loginSuccess = await Promise.race([loggedInPromise, util.wait(5000)]);
-            await client.close();
-            if (loginSuccess) {
-                this.signedIn = true;
+            if (this.shouldLogin) {
+                console.log("Signing into Origin.");
+                // TODO: Add error handling. Too much work at the moment.
+                await this.evalCode(client, `document.getElementById('email').value = '${this.email}'`);
+                await this.evalCode(client, `document.getElementById('password').value = '${this.password}'`);
+                await this.evalCode(client, "document.getElementById('rememberMe').checked = true");
+                await util.wait(10);
+                this.evalCode(client, "document.getElementById('logInBtn').click()");
+                const loginSuccess = await Promise.race([util.waitForEvent(client, "Page.loadEventFired"), util.wait(5000)]);
+                if (loginSuccess) {
+                    this.signedIn = true;
+                } else {
+                    this.signedIn = false;
+                    return false;
+                }
             } else {
-                this.signedIn = false;
-                return false;
+                console.log("[OI] Please sign in to Origin.");
+                console.log("[OI] Exiting in 10 seconds...");
+                await util.wait(10000);
+                process.exit(0);
             }
+            await client.close();
             delete debugOptionsProtocol.target;
         }
         while (!homePage) {

@@ -42,23 +42,23 @@ export default class BFController extends EventEmitter {
         if (newState === this.state) return;
         this.firstAntiIdle = true;
         const oldState = this.currentState;
+        // If we're supposed to be disconnected, don't bother setting the state to disconnected.
+        if ((this.currentTarget.guid === null) && (newState === GameState.DISCONNECTED)) {
+            this.currentState = GameState.IDLE;
+            return;
+        }
         this.currentState = newState;
         this.emit("newState", oldState);
         // Once game launches, set a timer to restart the connection process.
-        // If the new state isn't joining, clear the failsafe timeout.
         if (this.launchTimer) {
             clearTimeout(this.launchTimer);
             this.launchTimer = null;
         }
-        if (newState === GameState.LAUNCHING) {
-            if (this.launchTimer) {
-                clearTimeout(this.launchTimer);
-                this.launchTimer = null;
-            }
+        if (BFController.timerStates.includes(newState)) {
             this.launchTimer = setTimeout(() => {
                 if (!this.currentTarget.guid) return;
                 this.joinServerById(this.currentTarget.guid);
-            }, 60000);
+            }, 120000);
         }
         // Detect unintentional disconnects & rejoin.
         if (this.currentTarget.guid && (newState === GameState.DISCONNECTED)) {
@@ -74,7 +74,7 @@ export default class BFController extends EventEmitter {
     public checkGame():void {
         this.getbfWindow();
         if ((!this.bfWindow) && (this.state !== GameState.LAUNCHING)) {
-            this.state = (this.currentTarget.guid === null) ? GameState.IDLE : GameState.DISCONNECTED;
+            this.state = GameState.DISCONNECTED;
             return;
         }
     }
@@ -133,7 +133,7 @@ export default class BFController extends EventEmitter {
         if (!this.bfWindow) return false;
         return process.kill(this.bfWindow.processId);
     }
-    // Private because it throws an err if BF1 isn't installed.
+    private static timerStates = [GameState.LAUNCHING, GameState.JOINING];
     private static async getDir(game: BFGame):Promise<string> {
         let regEntry;
         if (game === "BF4") {
