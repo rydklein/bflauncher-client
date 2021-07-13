@@ -8,7 +8,7 @@ import * as util from "./util";
 import { BFGame, ServerData } from "./ServerInterface";
 import { GameState } from "./OriginInterface";
 export default class BFController extends EventEmitter {
-    private game: BFGame;
+    private game:BFGame;
     private currentState:GameState = GameState.IDLE;
     private currentTarget:ServerData = {
         "name":null,
@@ -16,16 +16,16 @@ export default class BFController extends EventEmitter {
         "user":"System",
         "timestamp":new Date().getTime(),
     }
-    private bfWindow: nodeWindows.Window | null = null;
-    private bfPath!: string;
-    private refreshInfoTimer: number | null = null;
-    private launchTimer: ReturnType<typeof setTimeout> | null = null;
+    private bfWindow:nodeWindows.Window | null = null;
+    private bfPath!:string;
+    private refreshInfoTimer:number | null = null;
+    private launchTimer:ReturnType<typeof setTimeout> | null = null;
     private firstAntiIdle = true;
     // Target
     get target():ServerData {
         return this.currentTarget;
     }
-    set target(newTarget: ServerData) {
+    set target(newTarget:ServerData) {
         if ((this.currentTarget.guid === newTarget.guid)) return;
         this.currentTarget = newTarget;
         if (!newTarget.guid) {
@@ -42,57 +42,47 @@ export default class BFController extends EventEmitter {
         if (newState === this.state) return;
         this.firstAntiIdle = true;
         const oldState = this.currentState;
-        // If we're supposed to be disconnected, don't bother setting the state to disconnected.
-        if ((this.currentTarget.guid === null) && (newState === GameState.DISCONNECTED)) {
-            this.currentState = GameState.IDLE;
-            return;
-        }
         this.currentState = newState;
         this.emit("newState", oldState);
-        // Once game launches, set a timer to restart the connection process.
+        // Clear any timers from other game states.
         if (this.launchTimer) {
             clearTimeout(this.launchTimer);
             this.launchTimer = null;
         }
-        if (BFController.timerStates.includes(newState)) {
+        // 20 seconds timeout to go from launching to joining.
+        if (newState === GameState.LAUNCHING) {
             this.launchTimer = setTimeout(() => {
-                if (!this.currentTarget.guid) return;
+                if (!this.currentTarget.guid) {
+                    this.leaveServer();
+                    return;
+                }
+                this.joinServerById(this.currentTarget.guid);
+            }, 30000);
+        }
+        // 2 minute timeout to join
+        if (newState === GameState.JOINING) {
+            this.launchTimer = setTimeout(() => {
+                if (!this.currentTarget.guid) {
+                    this.leaveServer();
+                    return;
+                }
                 this.joinServerById(this.currentTarget.guid);
             }, 120000);
         }
         // Detect unintentional disconnects & rejoin.
-        if (this.currentTarget.guid && (newState === GameState.DISCONNECTED)) {
+        if (this.currentTarget.guid && (newState === GameState.IDLE)) {
             this.joinServerById(this.currentTarget.guid);
             return;
         }
     }
-    constructor(currentGame: BFGame) {
+    constructor(currentGame:BFGame) {
         super();
         this.game = currentGame;
         this.init();
     }
-    public checkGame():void {
-        this.getbfWindow();
-        if ((!this.bfWindow) && (this.state !== GameState.LAUNCHING)) {
-            this.state = GameState.DISCONNECTED;
-            return;
-        }
-    }
-    private getbfWindow() {
-        let bfWindow:nodeWindows.Window | null = null;
-        const windows:Array<nodeWindows.Window> = nodeWindows.windowManager.getWindows();
-        const gameTitle = (this.game === "BF4") ? "Battlefield 4" : "Battlefield™ 1";
-        for (const window of windows) {
-            if (window.getTitle() === gameTitle) {
-                bfWindow = window;
-                break;
-            }
-        }
-        this.bfWindow = bfWindow;
-    }
     public antiIdle = (async () => {
         if (this.currentState !== GameState.ACTIVE) return;
-        if (!this.bfWindow) this.getbfWindow();
+        this.setBFWindow();
         if (!this.bfWindow) return;  
         this.bfWindow.restore();
         this.bfWindow.bringToTop();
@@ -118,23 +108,53 @@ export default class BFController extends EventEmitter {
     private async joinServerById(gameId:string) {
         let idToJoin = gameId;
         if (this.game === "BF4") {
-            idToJoin = (await (await fetch(`https://keeper.battlelog.com/snapshot/${gameId}`)).json()).snapshot.gameId;
+            const idReq = await (await fetch(`https://battlelog.battlefield.com/bf4/servers/show/PC/${gameId}`, {
+                "headers": {
+                    "User-Agent": "Mozilla/5.0 SeederManager",
+                    "Accept": "*/*",
+                    "X-AjaxNavigation": "1",
+                    "X-Requested-With": "XMLHttpRequest",
+                },
+                "method": "GET",
+            })).json();
+            idToJoin = idReq.context.server.gameId;
         }
         if (this.currentState !== GameState.IDLE) {
             await this.leaveServer();
             // Wait for Cloud Sync
             await util.wait(5000);
         }
-        const launchArgs = ["-gameId", idToJoin, "-gameMode", "MP", "-role", "soldier", "-asSpectator", "false", "-parentSessinId", "-joinWithParty", "false", "-Origin_NoAppFocus"];
+        const launchArgs = ["-gameId", idToJoin.toString(), "-gameMode", "MP", "-role", "soldier", "-asSpectator", "false", "-parentSessinId", "-joinWithParty", "false", "-Origin_NoAppFocus"];
         child_process.spawn(this.bfPath, launchArgs);
+        if (this.launchTimer) {
+            clearTimeout(this.launchTimer);
+            this.launchTimer = null;
+        }
+        // If we don't go from idle to another state in 30 seconds, retry.
+        this.launchTimer = setTimeout(() => {
+            if (!this.currentTarget.guid) {
+                this.leaveServer();
+                return;
+            }
+            this.joinServerById(this.currentTarget.guid);
+        }, 30000);
     }
-    private leaveServer():boolean {
-        if (!this.bfWindow) this.getbfWindow();
-        if (!this.bfWindow) return false;
-        return process.kill(this.bfWindow.processId);
+    private async leaveServer():Promise<void> {
+        this.setBFWindow();
+        if (!this.bfWindow) {
+            if (this.currentState === GameState.LAUNCHING) {
+                await Promise.race([util.wait(15000), util.waitForEvent(this, "newState")]);
+            }
+            this.setBFWindow();
+        }
+        if (!this.bfWindow) return;
+        process.kill(this.bfWindow.processId);
+        await util.wait(1000);
     }
-    private static timerStates = [GameState.LAUNCHING, GameState.JOINING];
-    private static async getDir(game: BFGame):Promise<string> {
+    private setBFWindow() {
+        this.bfWindow = util.getBFWindow(this.game);
+    }
+    private static async getDir(game:BFGame):Promise<string> {
         let regEntry;
         if (game === "BF4") {
             regEntry =  "\\SOFTWARE\\EA Games\\Battlefield 4";

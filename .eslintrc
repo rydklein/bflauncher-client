@@ -29,7 +29,10 @@
       "warn",
       "double"
     ],
+    "switch-colon-spacing": ["error", {"after": true, "before": false}],
     "@typescript-eslint/no-explicit-any": "off",
-    "@typescript-eslint/no-non-null-assertion": "off"
+    "@typescript-eslint/no-non-null-assertion": "off",
+    "@typescript-eslint/consistent-type-definitions": ["warn", "interface"],
+    "@typescript-eslint/type-annotation-spacing": ["warn", {"after": false, "before": false}]
   }
 }

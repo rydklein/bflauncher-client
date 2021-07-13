@@ -76,7 +76,7 @@ typings/
 .fusebox/
 # Other Stuff
 config.json
-.local-chromium
-dist
 *.js
 out.txt
+buildconfig
+dist

@@ -24,13 +24,14 @@ async function main() {
     console.log("[OI] Initializing Origin.");
     originInterface = new OriginInterface((!!config.email), config.email, config.password);
     await util.waitForEvent(originInterface, "ready");
+    console.log("[OI] Ready.");
     // Initialize Server Interface
     console.log("[SI] Initializing Server Interface.");
-    serverInterface = new ServerInterface(controlServer!, authToken!);
+    serverInterface = new ServerInterface(originInterface.playerName, controlServer, authToken);
     serverInterface.on("connected", () => {
         console.log("[SI] Server Interface connected.");
     });
-    if (originInterface.hasBF4) {
+    if (originInterface.hasGame("BF4")) {
         console.log("[BF4] Initializing.");
         bfFour = new BFController("BF4");
         await util.waitForEvent(bfFour, "ready");
@@ -40,15 +41,11 @@ async function main() {
             serverInterface.updateState(bfFour.state, "BF4");
         });
         originInterface.on("bf4StatusChange", () => {
-            bfFour.state = originInterface.originBF4State;
+            bfFour.state = originInterface.getState("BF4");
         });
-        originInterface.on("gameClosed", () => {
-            bfFour.checkGame();
-        });
-        console.log("[BF4] Ready.");
     }
     // Initialize bfOne
-    if (originInterface.hasBF1) {
+    if (originInterface.hasGame("BF1")) {
         console.log("[BF1] Initializing.");
         bfOne = new BFController("BF1");
         await util.waitForEvent(bfOne, "ready");
@@ -58,19 +55,16 @@ async function main() {
             serverInterface.updateState(bfOne.state, "BF1");
         });
         originInterface.on("bf1StatusChange", () => {
-            bfOne.state = originInterface.originBF1State;
-        });
-        originInterface.on("gameClosed", () => {
-            bfOne.checkGame();
+            bfOne.state = originInterface.getState("BF1");
         });
     }
     serverInterface.on("newTarget", async (newGame:BFGame, newTarget:ServerData) => {
-        if((newGame === "BF4") && originInterface.hasBF4 && bfFour) {
+        if((newGame === "BF4") && originInterface.hasGame("BF4") && bfFour) {
             serverInterface.updateState(bfFour.state, "BF4");
             if (newTarget.guid === bfFour.target.guid) return;
             bfFour.target = newTarget;
         }
-        if (newGame === "BF1" && originInterface.hasBF1 && bfOne) {
+        if (newGame === "BF1" && originInterface.hasGame("BF1") && bfOne) {
             serverInterface.updateState(bfOne.state, "BF1");
             if (newTarget.guid === bfOne.target.guid) return;
             bfOne.target = newTarget;
@@ -86,13 +80,13 @@ async function main() {
     });
     serverInterface.initTargets();
     setInterval(async () => {
-        if (originInterface.hasBF4) {
+        if (originInterface.hasGame("BF4")) {
             await bfFour.antiIdle();
         }
-        if (originInterface.hasBF1) {
+        if (originInterface.hasGame("BF1")) {
             await bfOne.antiIdle();
         }
-    }, 60000);
+    }, 120000);
 }
 
 main();

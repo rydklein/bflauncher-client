@@ -3,9 +3,9 @@ import EventEmitter from "events";
 import { io, Socket } from "socket.io-client";
 import { GameState } from "./OriginInterface";
 export default class ServerInterface extends EventEmitter {
-    private socket:Socket;
     public currentGUID;
-    constructor (serverAddress:string, authToken:string) {
+    private socket:Socket;
+    constructor (playerName:string, serverAddress:string, authToken:string) {
         super();
         this.socket = io(`wss://${serverAddress}/ws/seeder`, {  auth: {
             hostname: hostname(),
@@ -27,7 +27,7 @@ export default class ServerInterface extends EventEmitter {
     private newTargetHandler = (async (game:BFGame, newTarget:ServerData) => {
         this.emit("newTarget", game, newTarget);
     }).bind(this);
-    public updateState = (newGameState:GameState, game: BFGame):void => {
+    public updateState = (newGameState:GameState, game:BFGame):void => {
         this.socket.emit("gameStateUpdate", game, GameState[newGameState]);
     }
     public async initTargets():Promise<void> {
@@ -36,10 +36,10 @@ export default class ServerInterface extends EventEmitter {
         this.newTargetHandler("BF1", initTargets["BF1"]);
     }
 }
-export type ServerData = {
+export type BFGame = "BF4" | "BF1";
+export interface ServerData {
     "name":string | null,
     "guid":string | null,
     "user":string,
     "timestamp":number
 }
-export type BFGame = "BF4" | "BF1";
