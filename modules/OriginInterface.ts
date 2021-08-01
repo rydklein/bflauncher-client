@@ -18,6 +18,7 @@ export default class OriginInterface extends EventEmitter {
     private shouldLogin:boolean;
     private originInstance!:child_process.ChildProcess;
     private originDebugger;
+    private logger = new util.Logger("OriginInterface");
     private launchStampBF4:number | null = null;
     private launchStampBF1:number | null = null;
     private originBF1State:GameState = GameState.IDLE;
@@ -76,7 +77,7 @@ export default class OriginInterface extends EventEmitter {
         setInterval(this.statusPoller, 1500);
         // If we disconnect from Origin, restart it and reinitialize it.
         this.originDebugger.once("disconnect", async () => {
-            console.log("[OI] Disconnected from Origin. Restarting...");
+            this.logger.log("Disconnected from Origin.\nRestarting Origin...");
             await this.restartOrigin();
             await this.initOrigin();
         });
@@ -98,6 +99,7 @@ export default class OriginInterface extends EventEmitter {
         return;
     }
     private initOrigin = async ():Promise<boolean> => {
+        this.logger.log("Initializing...");
         const debugOptions:any = {
             port: "8081",
         };
@@ -138,14 +140,14 @@ export default class OriginInterface extends EventEmitter {
             await this.originDebugger.Runtime.enable();
             await this.originDebugger.Page.enable();
             if (this.shouldLogin) {
-                console.log("Signing into Origin.");
+                this.logger.log("Signing into Origin.");
                 // TODO: Add error handling. Too much work at the moment.
                 await this.evalCode(`document.getElementById('email').value = '${this.email}'`);
                 await this.evalCode(`document.getElementById('password').value = '${this.password}'`);
                 await this.evalCode("document.getElementById('rememberMe').checked = true");
                 await util.wait(10);
                 this.evalCode("document.getElementById('logInBtn').click()");
-                const loginSuccess = await Promise.race([util.waitForEvent(this.originDebugger, "Page.loadEventFired"), util.wait(5000)]);
+                const loginSuccess = await util.waitForEvent(this.originDebugger, "Page.loadEventFired", 5000);
                 if (loginSuccess) {
                     this.signedIn = true;
                 } else {
@@ -153,8 +155,7 @@ export default class OriginInterface extends EventEmitter {
                     return false;
                 }
             } else {
-                console.log("[OI] Please sign in to Origin.");
-                console.log("[OI] Exiting in 10 seconds...");
+                this.logger.log("Please manually sign into Origin.\nExiting in 10 seconds...");
                 await util.wait(10000);
                 process.exit(0);
             }
@@ -177,6 +178,7 @@ export default class OriginInterface extends EventEmitter {
         // Detects game status changes and sets window.lastEvent to whatever it was.
         // Since we can't do much to interact with the debugger, we just have to poll it whenever we wanna check our status.
         await this.evalCode(OriginInterface.presenceHook);
+        this.logger.log("Ready.");
         return true;
     }
     private async evalCode(code:string) {
@@ -195,7 +197,7 @@ export default class OriginInterface extends EventEmitter {
             success = false;
         }
         if (!success) {
-            console.log("Origin hung. Relaunching...");
+            this.logger.log("Disconnected from Origin.\nRestarting Origin...");
             await this.restartOrigin();
             await this.initOrigin();
             return;
@@ -235,12 +237,12 @@ export default class OriginInterface extends EventEmitter {
         }
     }).bind(this)
     private async checkClosed(game:BFGame) {
-        // Check if either game is closed. If a game is detected to be closed but is supposed to be launching, give it 20 seconds, then check again.
+        // Check if either game is closed. If a game is detected to be closed but is supposed to be launching, give it 15 seconds, then check again.
         if (!util.isGameOpen(game)) { 
             if ((this.getState(game) === GameState.LAUNCHING)) {
                 if (!this.getLaunchStamp(game)) {
                     this.setLaunchStamp(game, new Date().getTime());
-                } else if ((new Date().getTime() - this.getLaunchStamp(game)!) >= 20000) {
+                } else if ((new Date().getTime() - this.getLaunchStamp(game)!) >= 15000) {
                     this.setState(game, GameState.IDLE);
                     await this.evalCode(`window.lastEvent${game} = null`);
                 }
@@ -279,12 +281,7 @@ export default class OriginInterface extends EventEmitter {
                     return oldState;
                 }
                 default: {
-                    if (newActivity.richPresence.startsWith("MP:") || newActivity.richPresence.startsWith("Multiplayer:") ) {
-                        return GameState.ACTIVE;
-                    } else {
-                        console.log("[OI] Unknown Presence Change.");
-                        console.dir(newActivity);
-                    }
+                    return GameState.ACTIVE;
                 }
             }
         }
@@ -318,7 +315,7 @@ export default class OriginInterface extends EventEmitter {
             if ((gameEvent.gameActivity.title === "")) {
                 window.gameClosed = true;
             }
-            if (gameEvent.gameActivity.title === "Battlefield™ 1") {
+            if (gameEvent.gameActivity.title.startsWith("Battlefield™ 1")) {
                 window.lastEventBF1 = JSON.parse(JSON.stringify(gameEvent));
             }
             if (gameEvent.gameActivity.title.startsWith("Battlefield 4™")) {

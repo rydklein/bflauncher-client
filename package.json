@@ -4,7 +4,7 @@
   "description": "",
   "bin": "client.js",
   "scripts": {
-    "build": "tsc --project ./ && pkg .",
+    "build": "tsc --project ./ && pkg . && tsc --build --clean ./",
     "postinstall": "patch-package"
   },
   "author": "",

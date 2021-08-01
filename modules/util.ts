@@ -6,10 +6,12 @@ export function wait(delay:number):Promise<void> {
         setTimeout(resolve, delay);
     });
 }
-export function waitForEvent(emitter:EventEmitter, eventName:string):any {
-    return new Promise((res) => {
+export function waitForEvent(emitter:EventEmitter, eventName:string, timeout?:number):any {
+    const eventPromise = new Promise((res) => {
         emitter.once(eventName, res);
     });
+    if (!timeout) return eventPromise;
+    return Promise.race([eventPromise, wait(timeout)]);
 }
 export function isGameOpen(gameToCheck:BFGame):boolean {
     return(!!getBFWindow(gameToCheck));
@@ -28,4 +30,18 @@ export function findWindowByName(targetTitle:string):nodeWindows.Window | null {
         }
     }
     return targetWindow;
+}
+export class Logger {
+    public readonly moduleName:string;
+    constructor(moduleName:string) {
+        this.moduleName = moduleName;
+    }
+    public log = (message:string):void => {
+        const logDate = new Date();
+        const logPrefix = `[${logDate.toLocaleDateString()} | ${logDate.toLocaleTimeString()}]: [${this.moduleName}] `;
+        const lines = message.split("\n");
+        for (const line of lines) {
+            console.log(logPrefix + line);
+        }
+    }
 }

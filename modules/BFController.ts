@@ -10,6 +10,7 @@ import { GameState } from "./OriginInterface";
 export default class BFController extends EventEmitter {
     private game:BFGame;
     private currentState:GameState = GameState.IDLE;
+    private logger;
     private currentTarget:ServerData = {
         "name":null,
         "guid":null,
@@ -27,11 +28,14 @@ export default class BFController extends EventEmitter {
     }
     set target(newTarget:ServerData) {
         if ((this.currentTarget.guid === newTarget.guid)) return;
+        const oldTarget = this.currentTarget;
         this.currentTarget = newTarget;
         if (!newTarget.guid) {
             this.leaveServer();
+            this.logger.log(`Ordered to disconnect from:\n${oldTarget.name} (${oldTarget.guid})\nBy: ${newTarget.user} (${new Date(newTarget.timestamp).toLocaleString()})`);
         } else {
             this.joinServerById(newTarget.guid);
+            this.logger.log(`New target set to:\n${newTarget.name} (${newTarget.guid})\nBy: ${newTarget.user} (${new Date(newTarget.timestamp).toLocaleString()})`);
         }
     }
     // State
@@ -44,12 +48,13 @@ export default class BFController extends EventEmitter {
         const oldState = this.currentState;
         this.currentState = newState;
         this.emit("newState", oldState);
+        this.logger.log(`${GameState[oldState]} -> ${GameState[newState]}`);
         // Clear any timers from other game states.
         if (this.launchTimer) {
             clearTimeout(this.launchTimer);
             this.launchTimer = null;
         }
-        // 20 seconds timeout to go from launching to joining.
+        // 1 minute timeout to go from launching to joining.
         if (newState === GameState.LAUNCHING) {
             this.launchTimer = setTimeout(() => {
                 if (!this.currentTarget.guid) {
@@ -57,7 +62,7 @@ export default class BFController extends EventEmitter {
                     return;
                 }
                 this.joinServerById(this.currentTarget.guid);
-            }, 30000);
+            }, 60000);
         }
         // 2 minute timeout to join
         if (newState === GameState.JOINING) {
@@ -78,15 +83,16 @@ export default class BFController extends EventEmitter {
     constructor(currentGame:BFGame) {
         super();
         this.game = currentGame;
+        this.logger = new util.Logger(`${this.game}Controller`);
         this.init();
     }
     public antiIdle = (async () => {
         if (this.currentState !== GameState.ACTIVE) return;
         this.setBFWindow();
-        if (!this.bfWindow) return;  
+        if (!this.bfWindow) return;
         this.bfWindow.restore();
         this.bfWindow.bringToTop();
-        await util.wait(1000);
+        await util.wait(2500);
         robot.keyTap("space");
         await util.wait(1000);
         if (this.firstAntiIdle) {
@@ -104,20 +110,26 @@ export default class BFController extends EventEmitter {
     private async init() { 
         this.bfPath = `${await BFController.getDir(this.game)}\\${this.game.toLowerCase()}.exe`;
         this.emit("ready");
+        this.logger.log("Ready.");
     }
     private async joinServerById(gameId:string) {
         let idToJoin = gameId;
         if (this.game === "BF4") {
-            const idReq = await (await fetch(`https://battlelog.battlefield.com/bf4/servers/show/PC/${gameId}`, {
-                "headers": {
-                    "User-Agent": "Mozilla/5.0 SeederManager",
-                    "Accept": "*/*",
-                    "X-AjaxNavigation": "1",
-                    "X-Requested-With": "XMLHttpRequest",
-                },
-                "method": "GET",
-            })).json();
-            idToJoin = idReq.context.server.gameId;
+            try {
+                const idReq = await (await fetch(`https://battlelog.battlefield.com/bf4/servers/show/PC/${gameId}`, {
+                    "headers": {
+                        "User-Agent": "Mozilla/5.0 SeederManager",
+                        "Accept": "*/*",
+                        "X-AjaxNavigation": "1",
+                        "X-Requested-With": "XMLHttpRequest",
+                    },
+                    "method": "GET",
+                })).json();
+                idToJoin = idReq.context.server.gameId;
+            } catch {
+                this.logger.log("Error fetching server info. Game will not launch.");
+                return;
+            }
         }
         if (this.currentState !== GameState.IDLE) {
             await this.leaveServer();
@@ -143,7 +155,7 @@ export default class BFController extends EventEmitter {
         this.setBFWindow();
         if (!this.bfWindow) {
             if (this.currentState === GameState.LAUNCHING) {
-                await Promise.race([util.wait(15000), util.waitForEvent(this, "newState")]);
+                await util.waitForEvent(this, "newState", 15000);
             }
             this.setBFWindow();
         }
@@ -154,7 +166,7 @@ export default class BFController extends EventEmitter {
     private setBFWindow() {
         this.bfWindow = util.getBFWindow(this.game);
     }
-    private static async getDir(game:BFGame):Promise<string> {
+    private static getDir(game:BFGame):Promise<string> {
         let regEntry;
         if (game === "BF4") {
             regEntry =  "\\SOFTWARE\\EA Games\\Battlefield 4";
@@ -169,6 +181,7 @@ export default class BFController extends EventEmitter {
                 key: regEntry,
             });
             regKey.values((err, items) => {
+                if (err) throw new Error(`Error finding install directory for ${game}. Please contact BadPylot.`);
                 const bfDir = items.find(element => (element.name === "Install Dir"));
                 resolve(bfDir.value);
             });
