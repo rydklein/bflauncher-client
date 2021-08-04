@@ -8,11 +8,13 @@ export default class ServerInterface extends EventEmitter {
     private socket:Socket;
     private logger = new util.Logger("ServerInterface");
     private initialized = false;
-    constructor (playerName:string, serverAddress:string, authToken:string) {
+    constructor (serverAddress:string, version:string, authToken:string, playerName:string) {
         super();
         const connectOptions = {
             "auth": {
                 "hostname": hostname(),
+                "playerName":playerName,
+                "version":version,
                 "token": authToken,
             },
             "autoConnect": false,
@@ -28,6 +30,14 @@ export default class ServerInterface extends EventEmitter {
             this.logger.log(`Disconnected from Control Server. (${DisconnectReasons[reason]})`);
         });
         this.socket.on("newTarget", this.newTargetHandler);
+        this.socket.on("restartOrigin", (author:string) => {
+            this.logger.log(`Ordered to restart Origin\nBy: ${author} (${new Date().toLocaleString()})`);
+            this.emit("restartOrigin");
+        });
+        this.socket.on("outOfDate", () => {
+            this.logger.log("Client is out of date. Please update your client.");
+            this.socket.disconnect();
+        });
     }
     public connect = async ():Promise<void> => {
         if (this.initialized) return;

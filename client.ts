@@ -1,6 +1,7 @@
 // Packages
 import fs from "fs";
 import buildConfig from "./buildconfig/config.js";
+import version from "./resources/version.json";
 import * as util from "./modules/util";
 import OriginInterface from "./modules/OriginInterface";
 import ServerInterface, { ServerData, BFGame } from "./modules/ServerInterface";
@@ -19,15 +20,15 @@ try {
     config = {};
 }
 async function main() {
-    console.log("BadPylot's Seeder Control Client");
+    console.log(`BadPylot's Seeder Control Client (${controlServer.split(".")[0].toUpperCase()}/v${version.version})`);
     console.log("// TODO: Add funny randomized sentences below the title line.");
     // Initialize OriginInterface
     originInterface = new OriginInterface((!!config.email), config.email, config.password);
     await util.waitForEvent(originInterface, "ready");
     // Initialize Server Interface
-    serverInterface = new ServerInterface(originInterface.playerName, controlServer, authToken);
+    serverInterface = new ServerInterface(controlServer, version.version, authToken, originInterface.playerName);
     if (originInterface.hasGame("BF4")) {
-        bfFour = new BFController("BF4");
+        bfFour = new BFController("BF4", originInterface.playerName);
         await util.waitForEvent(bfFour, "ready");
         bfFour.on("newState", () => {
             serverInterface.updateState(bfFour.state, "BF4");
@@ -37,7 +38,7 @@ async function main() {
         });
     }
     if (originInterface.hasGame("BF1")) {
-        bfOne = new BFController("BF1");
+        bfOne = new BFController("BF1", originInterface.playerName);
         await util.waitForEvent(bfOne, "ready");
         bfOne.on("newState", () => {
             serverInterface.updateState(bfOne.state, "BF1");
@@ -58,6 +59,10 @@ async function main() {
             bfOne.target = newTarget;
         }
     });
+    serverInterface.on("connected", () => {
+        if (originInterface.hasGame("BF4")) serverInterface.updateState(bfFour.state, "BF4");
+        if (originInterface.hasGame("BF1")) serverInterface.updateState(bfOne.state, "BF1");
+    });
     serverInterface.on("disconnected", () => {
         const emptyTarget = {
             "name":null,
@@ -71,6 +76,10 @@ async function main() {
         if (originInterface.hasGame("BF1")) {
             bfOne.target = emptyTarget;
         }
+    });
+    serverInterface.on("restartOrigin", () => {
+        if (!originInterface.debuggerConnected) return;
+        originInterface.reloadOrigin();
     });
     setInterval(async () => {
         if (originInterface.hasGame("BF4")) {

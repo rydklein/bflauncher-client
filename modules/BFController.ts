@@ -8,9 +8,9 @@ import * as util from "./util";
 import { BFGame, ServerData } from "./ServerInterface";
 import { GameState } from "./OriginInterface";
 export default class BFController extends EventEmitter {
-    private game:BFGame;
+    public game:BFGame;
+    public accountName:string;
     private currentState:GameState = GameState.IDLE;
-    private logger;
     private currentTarget:ServerData = {
         "name":null,
         "guid":null,
@@ -19,9 +19,10 @@ export default class BFController extends EventEmitter {
     }
     private bfWindow:nodeWindows.Window | null = null;
     private bfPath!:string;
-    private refreshInfoTimer:number | null = null;
     private launchTimer:ReturnType<typeof setTimeout> | null = null;
+    private logger;
     private firstAntiIdle = true;
+    private dxError = false;
     // Target
     get target():ServerData {
         return this.currentTarget;
@@ -80,10 +81,12 @@ export default class BFController extends EventEmitter {
             return;
         }
     }
-    constructor(currentGame:BFGame) {
+    constructor(currentGame:BFGame, accountName:string) {
         super();
         this.game = currentGame;
+        this.accountName = accountName;
         this.logger = new util.Logger(`${this.game}Controller`);
+        setInterval(this.watchdog, 30000);
         this.init();
     }
     public antiIdle = (async () => {
@@ -166,6 +169,36 @@ export default class BFController extends EventEmitter {
     private setBFWindow() {
         this.bfWindow = util.getBFWindow(this.game);
     }
+    private watchdog = (async () => {
+        if (!this.currentTarget.guid && (this.currentState !== GameState.IDLE)) return await this.leaveServer();
+        if (this.currentTarget.guid && (this.currentState === GameState.ACTIVE) && this.game === "BF4") {
+            const keeperData = (await (await fetch(`https://keeper.battlelog.com/snapshot/${this.currentTarget.guid}`)).json()).snapshot.teamInfo;
+            if (!keeperData) {
+                this.logger.log("Error fetching keeper data.");
+                return;
+            }
+            let playerFound = false;
+            for (const team in keeperData) {
+                for (const player in keeperData[team].players) {
+                    if (keeperData[team].players[player].name === this.accountName) {
+                        playerFound = true;
+                        break;
+                    }
+                }
+                if (playerFound) break;
+            }
+            if (!playerFound) {
+                if (this.dxError) {
+                    this.dxError = false;
+                    return await this.joinServerById(this.currentTarget.guid);
+                } else {
+                    this.dxError = true;
+                }
+            } else {
+                this.dxError = false;
+            }
+        }
+    }).bind(this);
     private static getDir(game:BFGame):Promise<string> {
         let regEntry;
         if (game === "BF4") {

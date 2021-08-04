@@ -1,7 +1,6 @@
 import child_process from "child_process";
 import CRI from "chrome-remote-interface";
 import EventEmitter from "events";
-import fetch from "node-fetch";
 import protocol from "../resources/protocol.json";
 import { BFGame } from "./ServerInterface";
 import * as util from "./util";
@@ -12,6 +11,8 @@ export default class OriginInterface extends EventEmitter {
     public signedIn = false;
     // Origin Username
     public playerName!:string;
+    // Whether the debugger is connected
+    public debuggerConnected = false;
     // Private (self-explanatory)
     private email:string | null;
     private password:string | null;
@@ -42,6 +43,12 @@ export default class OriginInterface extends EventEmitter {
         if (game === "BF1") return this.originBF1State;
         throw new Error("Input was not BFGame.");
     }
+    public async reloadOrigin():Promise<void> {
+        this.debuggerConnected = false;
+        this.originDebugger.removeAllListeners("disconnect");
+        await this.restartOrigin();
+        await this.initOrigin();
+    }
     private setState(game:BFGame, newState:GameState):void {
         if (game === "BF4") this.originBF4State = newState;
         if (game === "BF1") this.originBF1State = newState;
@@ -61,7 +68,6 @@ export default class OriginInterface extends EventEmitter {
             throw new Error("Error initializing Origin.");
         }
         // Get array of installed games
-        this.playerName = await this.evalCode("Origin.user.originId()");
         // I'm so sorry to anyone reading this.
         // Problem: Each version of the game has an OID for each region. That's a lot of OIDs to log.
         // Solution:
@@ -73,13 +79,17 @@ export default class OriginInterface extends EventEmitter {
         }
         this.hasBF4 = (await this.evalCode("window.hasBF4")) || false;
         this.hasBF1 = (await this.evalCode("window.hasBF1")) || false;
+        this.playerName = "";
+        while (this.playerName === "") {
+            this.playerName = await this.evalCode("Origin.user.originId()");
+            if (this.playerName === "") await util.wait(100);
+        }
         this.emit("ready");
         setInterval(this.statusPoller, 1500);
         // If we disconnect from Origin, restart it and reinitialize it.
         this.originDebugger.once("disconnect", async () => {
             this.logger.log("Disconnected from Origin.\nRestarting Origin...");
-            await this.restartOrigin();
-            await this.initOrigin();
+            this.reloadOrigin();
         });
     }
     private restartOrigin = async ():Promise<void> => {
@@ -179,6 +189,7 @@ export default class OriginInterface extends EventEmitter {
         // Since we can't do much to interact with the debugger, we just have to poll it whenever we wanna check our status.
         await this.evalCode(OriginInterface.presenceHook);
         this.logger.log("Ready.");
+        this.debuggerConnected = true;
         return true;
     }
     private async evalCode(code:string) {
@@ -186,24 +197,8 @@ export default class OriginInterface extends EventEmitter {
         return output.result.value;
     }
     // Timers
-    private originWatchdog = (async () => {
-        // If we're currently launching/initializing Origin, return.
-        if (!(this.signedIn && this.originRunning)) return;
-        let success = true;
-        try {
-            // Check if Origin's frozen using the magic link.
-            await fetch("http://127.0.0.1:3215/ping", { timeout: 1000 });
-        } catch (e) {
-            success = false;
-        }
-        if (!success) {
-            this.logger.log("Disconnected from Origin.\nRestarting Origin...");
-            await this.restartOrigin();
-            await this.initOrigin();
-            return;
-        }
-    }).bind(this);
     private statusPoller = (async () => {
+        if (!this.debuggerConnected) return;
         let lastEventBF1;
         let lastEventBF4;
         try {
@@ -304,7 +299,7 @@ export default class OriginInterface extends EventEmitter {
                         if ((catInfo.masterTitleId == "190132") && (game.playable)) {
                             window.hasBF1 = true;
                         }
-                        if (processedGames == (out.updatedGames.length - 1)) window.gameChecksDone = true;
+                        if (processedGames == out.updatedGames.length) window.gameChecksDone = true;
                     });
                 }
             });
