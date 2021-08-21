@@ -7,6 +7,7 @@ import winreg from "winreg";
 import * as util from "./util";
 import { BFGame, ServerData } from "./ServerInterface";
 import { GameState } from "./OriginInterface";
+robot.setKeyboardDelay(500);
 export default class BFController extends EventEmitter {
     public game:BFGame;
     public accountName:string;
@@ -95,20 +96,43 @@ export default class BFController extends EventEmitter {
         if (!this.bfWindow) return;
         this.bfWindow.restore();
         this.bfWindow.bringToTop();
-        await util.wait(2500);
-        robot.keyTap("space");
-        await util.wait(1000);
-        if (this.firstAntiIdle) {
-            await util.wait(1000);
+        await util.wait(500);
+        if ((this.game === "BF1") && this.firstAntiIdle) {
+            // Skip the squad screen
+            this.firstAntiIdle = false;
             robot.keyTap("space");
-            await util.wait(1000);
+            for (let i = 0; i < 7; i++) {
+                robot.keyTap("down");
+                robot.keyTap("space");
+            }
+            await util.wait(4000);
         }
         robot.keyTap("space");
-        await util.wait(1000);
+        await util.wait(this.game === "BF4" ? 500 : 1500);
+        robot.keyTap("space");
         this.bfWindow.minimize();
-        await util.wait(1000);
-        this.firstAntiIdle = false;
-        return;
+        await util.wait(500);
+        // const screenSize = robot.getScreenSize();
+        // // 565 from left
+        // // 190 from top
+        // // 137 from right
+        // // 120 from bottom
+        // // 49 x 49
+        // // Set offsets
+        // const startX = 565;
+        // const startY = 190;
+        // const endX = screenSize.width - 137;
+        // const endY = screenSize.height - 120;
+        // // vScan
+        // for (let y = startY + 49; y <= endY; y = y + 49) {
+        //     for (let x = startX + 49; x <= endX; x = x + 49) {
+        //         robot.moveMouse(x, y);
+        //         await util.wait(1);
+        //         robot.mouseClick("left");
+        //         await util.wait(1);
+        //     }
+        // }
+        // return;
     }).bind(this);
     private async init() { 
         this.bfPath = `${await BFController.getDir(this.game)}\\${this.game.toLowerCase()}.exe`;
@@ -171,8 +195,13 @@ export default class BFController extends EventEmitter {
     }
     private watchdog = (async () => {
         if (!this.currentTarget.guid && (this.currentState !== GameState.IDLE)) return await this.leaveServer();
-        if (this.currentTarget.guid && (this.currentState === GameState.ACTIVE) && this.game === "BF4") {
-            const keeperData = (await (await fetch(`https://keeper.battlelog.com/snapshot/${this.currentTarget.guid}`)).json()).snapshot.teamInfo;
+        if (this.game === "BF4" && this.currentTarget.guid && (this.currentState === GameState.ACTIVE)) {
+            let keeperData;
+            try {
+                keeperData = (await (await fetch(`https://keeper.battlelog.com/snapshot/${this.currentTarget.guid}`)).json()).snapshot.teamInfo;
+            } catch {
+                // Either way, in the case of an error, keeperData doesn't exist, so we handle it later on down the line.
+            }
             if (!keeperData) {
                 this.logger.log("Error fetching keeper data.");
                 return;

@@ -2,13 +2,14 @@
   "name": "bflauncher",
   "version": "1.0.0",
   "description": "",
+  "private":"true",
   "bin": "client.js",
   "scripts": {
-    "build": "tsc --project ./ && pkg . && tsc --build --clean ./",
+    "build": "npx tsc --project ./ && npx pkg . && npx tsc --build --clean ./",
     "postinstall": "patch-package"
   },
   "author": "",
-  "license": "ISC",
+  "license": "CC BY-NC-ND 4.0",
   "dependencies": {
     "chrome-remote-interface": "^0.30.0",
     "node-fetch": "^2.6.1",
@@ -25,6 +26,7 @@
     "eslint": "^7.28.0",
     "eslint-plugin-import": "^2.23.4",
     "patch-package": "^6.4.7",
+    "pkg": "^5.3.1",
     "typescript": "^4.3.2"
   },
   "pkg": {
@@ -34,7 +36,7 @@
       "node_modules/node-window-manager/build/Release/addon.node"
     ],
     "targets": [
-      "node14-windows-x64"
+      "node16-windows-x64"
     ],
     "outputPath": "dist"
   }

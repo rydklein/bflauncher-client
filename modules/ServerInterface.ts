@@ -22,8 +22,8 @@ export default class ServerInterface extends EventEmitter {
         this.socket = io(`wss://${serverAddress}/ws/seeder`, connectOptions);
         // Socket Handlers
         this.socket.on("connect", () => {
-            this.emit("connected");
             this.logger.log("Connected to Control Server.");
+            this.emit("connected");
         });
         this.socket.on("disconnect", async (reason) => {
             this.emit("disconnected");

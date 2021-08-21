@@ -13,6 +13,9 @@ export default class OriginInterface extends EventEmitter {
     public playerName!:string;
     // Whether the debugger is connected
     public debuggerConnected = false;
+    // You're dumb if you don't understand what these mean
+    public hasBF4 = false;
+    public hasBF1 = false;
     // Private (self-explanatory)
     private email:string | null;
     private password:string | null;
@@ -24,19 +27,12 @@ export default class OriginInterface extends EventEmitter {
     private launchStampBF1:number | null = null;
     private originBF1State:GameState = GameState.IDLE;
     private originBF4State:GameState = GameState.IDLE;
-    private hasBF4 = false;
-    private hasBF1 = false;
     constructor(logIn:boolean, email?:string, password?:string) {
         super();
         this.email = email || null;
         this.password = password || null;
         this.shouldLogin = logIn;
         this.init();
-    }
-    public hasGame(game:BFGame):boolean {
-        if (game === "BF4") return this.hasBF4;
-        if (game === "BF1") return this.hasBF1;
-        throw new Error("Input was not BFGame.");
     }
     public getState(game:BFGame):GameState {
         if (game === "BF4") return this.originBF4State;
@@ -73,18 +69,34 @@ export default class OriginInterface extends EventEmitter {
         // Solution:
         await this.evalCode(OriginInterface.callbackHell);
         let gameChecksDone;
+        let i = 0;
         while(!gameChecksDone) {
+            if (i > 100) {
+                this.logger.log("Error determining ownership of BF4/BF1.\nPlease manually specify ownership in config.json.");
+                break;
+            }
+            i++;
             gameChecksDone = await this.evalCode("window.gameChecksDone");
             if (!gameChecksDone) await util.wait(100);
         }
         this.hasBF4 = (await this.evalCode("window.hasBF4")) || false;
         this.hasBF1 = (await this.evalCode("window.hasBF1")) || false;
+        this.logger.log(`BF4: ${this.hasBF4 ? "OWNED" : "UNOWNED"}`);
+        this.logger.log(`BF1: ${this.hasBF1 ? "OWNED" : "UNOWNED"}`);
         this.playerName = "";
+        i = 0;
         while (this.playerName === "") {
+            if (i > 20) {
+                this.logger.log("Error determining account name.\nPlease manually specify account name in config.json.");
+                break;
+            }
+            i++;
             this.playerName = await this.evalCode("Origin.user.originId()");
             if (this.playerName === "") await util.wait(100);
         }
+        this.logger.log(`Username: ${this.playerName}`);
         this.emit("ready");
+        this.logger.log("Ready.");
         setInterval(this.statusPoller, 1500);
         // If we disconnect from Origin, restart it and reinitialize it.
         this.originDebugger.once("disconnect", async () => {
@@ -95,6 +107,7 @@ export default class OriginInterface extends EventEmitter {
     private restartOrigin = async ():Promise<void> => {
         // Find and restart Origin. Ensures that there are no artifacts left from last session in Origin Memory,
         // and ensures that we can access the debugger.
+        this.logger.log("Launching Origin...");
         if (!this.originInstance) {
             const originProcess = await util.findWindowByName("Origin");
             if (originProcess) {
@@ -104,12 +117,22 @@ export default class OriginInterface extends EventEmitter {
             this.originInstance.kill();
         }
         this.originRunning = false;
-        this.originInstance = child_process.spawn(`${process.env["ProgramFiles(x86)"]}\\Origin\\Origin.exe`, ["-StartClientMinimized", "--remote-debugging-port=8081"], { detached:true });
-        this.originRunning = true;
+        const originDir = `${process.env["ProgramFiles(x86)"]}\\Origin`;
+        const originLaunchOptions:child_process.SpawnOptions = {
+            "detached":true,
+            "cwd":originDir,
+        };
+        try {
+            this.originInstance = child_process.spawn(`${originDir}\\Origin.exe`, ["-StartClientMinimized", "--remote-debugging-port=8081"], originLaunchOptions);
+            this.originRunning = true;
+        } catch {
+            this.logger.log("Could not start Origin.");
+            await util.wait(10000);
+            process.exit(0);
+        }
         return;
     }
     private initOrigin = async ():Promise<boolean> => {
-        this.logger.log("Initializing...");
         const debugOptions:any = {
             port: "8081",
         };
@@ -149,26 +172,18 @@ export default class OriginInterface extends EventEmitter {
             this.originDebugger = await CRI(debugOptionsProtocol);
             await this.originDebugger.Runtime.enable();
             await this.originDebugger.Page.enable();
+            await this.evalCode("document.getElementById('rememberMe').checked = true");
             if (this.shouldLogin) {
-                this.logger.log("Signing into Origin.");
-                // TODO: Add error handling. Too much work at the moment.
+                this.logger.log("Automagically signing into Origin...");
                 await this.evalCode(`document.getElementById('email').value = '${this.email}'`);
                 await this.evalCode(`document.getElementById('password').value = '${this.password}'`);
-                await this.evalCode("document.getElementById('rememberMe').checked = true");
                 await util.wait(10);
                 this.evalCode("document.getElementById('logInBtn').click()");
-                const loginSuccess = await util.waitForEvent(this.originDebugger, "Page.loadEventFired", 5000);
-                if (loginSuccess) {
-                    this.signedIn = true;
-                } else {
-                    this.signedIn = false;
-                    return false;
-                }
+                // TODO: Check if logged in
             } else {
-                this.logger.log("Please manually sign into Origin.\nExiting in 10 seconds...");
-                await util.wait(10000);
-                process.exit(0);
+                this.logger.log("Please manually sign into Origin.");
             }
+            await util.waitForEvent(this.originDebugger, "Page.loadEventFired");
             await this.originDebugger.close();
             delete debugOptionsProtocol.target;
         }
@@ -177,6 +192,10 @@ export default class OriginInterface extends EventEmitter {
             tabs = await CRI.List(debugOptions);
             // Homepage has to exist since we already signed in successfully.
             homePage = tabs.find(element => element.url.includes("origin.com/usa"));
+        }
+        this.signedIn = true;
+        if (loginTab) {
+            this.logger.log("Successfully signed in.");
         }
         // Connect to the home page, wait for the page to load (or 5 seconds to elapse), and injects our listeners.
         debugOptionsProtocol.target = homePage.webSocketDebuggerUrl;
@@ -188,7 +207,6 @@ export default class OriginInterface extends EventEmitter {
         // Detects game status changes and sets window.lastEvent to whatever it was.
         // Since we can't do much to interact with the debugger, we just have to poll it whenever we wanna check our status.
         await this.evalCode(OriginInterface.presenceHook);
-        this.logger.log("Ready.");
         this.debuggerConnected = true;
         return true;
     }
@@ -289,16 +307,16 @@ export default class OriginInterface extends EventEmitter {
         function callbackHell() {
             let processedGames = 0;
             Origin.client.games.requestGamesStatus().then((out) => {
-                if (!out.refreshComplete) return callbackHell();
                 for (const game of out.updatedGames) {
                     Origin.games.catalogInfo(game.productId).then((catInfo) => {
-                        processedGames++;
                         if ((catInfo.masterTitleId == "76889") && (game.playable)) {
                             window.hasBF4 = true;
                         }
                         if ((catInfo.masterTitleId == "190132") && (game.playable)) {
                             window.hasBF1 = true;
                         }
+                    }).finally(() => {
+                        processedGames++;
                         if (processedGames == out.updatedGames.length) window.gameChecksDone = true;
                     });
                 }
@@ -307,6 +325,7 @@ export default class OriginInterface extends EventEmitter {
         callbackHell();`
     static presenceHook = `
         Origin.events.on("xmppPresenceChanged", (gameEvent) => {
+            if (gameEvent.jid.split("@")[0] !== Origin.user.userPid().toString()) return;
             if ((gameEvent.gameActivity.title === "")) {
                 window.gameClosed = true;
             }
