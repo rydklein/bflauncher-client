@@ -35,8 +35,8 @@ export default class OriginInterface extends EventEmitter {
         this.init();
     }
     public getState(game:BFGame):GameState {
-        if (game === "BF4") return this.originBF4State;
-        if (game === "BF1") return this.originBF1State;
+        if (game === BFGame.BF4) return this.originBF4State;
+        if (game === BFGame.BF1) return this.originBF1State;
         throw new Error("Input was not BFGame.");
     }
     public async reloadOrigin():Promise<void> {
@@ -46,17 +46,17 @@ export default class OriginInterface extends EventEmitter {
         await this.initOrigin();
     }
     private setState(game:BFGame, newState:GameState):void {
-        if (game === "BF4") this.originBF4State = newState;
-        if (game === "BF1") this.originBF1State = newState;
+        if (game === BFGame.BF4) this.originBF4State = newState;
+        if (game === BFGame.BF1) this.originBF1State = newState;
     }
     private getLaunchStamp(game:BFGame):number | null {
-        if (game === "BF4") return this.launchStampBF4;
-        if (game === "BF1") return this.launchStampBF1;
+        if (game === BFGame.BF4) return this.launchStampBF4;
+        if (game === BFGame.BF1) return this.launchStampBF1;
         throw new Error("Input was not BFGame.");
     }
     private setLaunchStamp(game:BFGame, newStamp:number | null):void {
-        if (game === "BF4") this.launchStampBF4 = newStamp;
-        if (game === "BF1") this.launchStampBF1 = newStamp;
+        if (game === BFGame.BF4) this.launchStampBF4 = newStamp;
+        if (game === BFGame.BF1) this.launchStampBF1 = newStamp;
     }
     private async init() {
         await this.restartOrigin();
@@ -238,8 +238,8 @@ export default class OriginInterface extends EventEmitter {
             this.originBF4State = OriginInterface.presenceToGameState(lastEventBF4.gameActivity, this.originBF4State);
         }
         // Used to only be called on game close detected but that was too buggy, so here we are...
-        const bf4CloseCheck = this.checkClosed("BF4");
-        const bf1CloseCheck = this.checkClosed("BF1");
+        const bf4CloseCheck = this.checkClosed(BFGame.BF4);
+        const bf1CloseCheck = this.checkClosed(BFGame.BF1);
         await bf4CloseCheck;
         await bf1CloseCheck;
         if (!(this.originBF1State === oldBF1State)) {
@@ -338,6 +338,7 @@ export default class OriginInterface extends EventEmitter {
         });`
 }
 export enum GameState {
+    "UNOWNED",
     "IDLE",
     "LAUNCHING",
     "JOINING",

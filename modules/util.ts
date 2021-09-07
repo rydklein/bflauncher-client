@@ -17,7 +17,7 @@ export function isGameOpen(gameToCheck:BFGame):boolean {
     return(!!getBFWindow(gameToCheck));
 }
 export function getBFWindow(game:BFGame):nodeWindows.Window | null {
-    const gameTitle = (game === "BF4") ? "Battlefield 4" : "Battlefield™ 1";
+    const gameTitle = (game === BFGame.BF4) ? "Battlefield 4" : "Battlefield™ 1";
     return findWindowByName(gameTitle) || null;
 }
 export function findWindowByName(targetTitle:string):nodeWindows.Window | null {

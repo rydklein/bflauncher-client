@@ -8,14 +8,16 @@ export default class ServerInterface extends EventEmitter {
     private socket:Socket;
     private logger = new util.Logger("ServerInterface");
     private initialized = false;
-    constructor (serverAddress:string, version:string, authToken:string, playerName:string) {
+    constructor (serverAddress:string, version:string, authToken:string, playerName:string, hasBF4:boolean, hasBF1:boolean) {
         super();
         const connectOptions = {
-            "auth": {
+            "query": {
                 "hostname": hostname(),
                 "playerName":playerName,
                 "version":version,
                 "token": authToken,
+                "hasBF4":hasBF4.toString(),
+                "hasBF1":hasBF1.toString(),
             },
             "autoConnect": false,
         };
@@ -44,19 +46,9 @@ export default class ServerInterface extends EventEmitter {
         const waitForConnect = util.waitForEvent(this, "connected", 60000);
         this.socket.connect();
         await waitForConnect; 
-        const initTargets = await this.getTarget();
-        this.newTargetHandler("BF4", initTargets["BF4"]);
-        this.newTargetHandler("BF1", initTargets["BF1"]);
     }
     public updateState = (newGameState:GameState, game:BFGame):void => {
-        this.socket.emit("gameStateUpdate", game, GameState[newGameState]);
-    }
-    private getTarget():Promise<Record<string, ServerData>> {
-        return new Promise((resolve) => {
-            this.socket.emit("getTarget", (newTarget:Record<string, ServerData>) => {
-                resolve(newTarget);
-            });
-        });
+        this.socket.emit("gameStateUpdate", game, newGameState);
     }
     private newTargetHandler = (async (game:BFGame, newTarget:ServerData) => {
         this.emit("newTarget", game, newTarget);
@@ -69,10 +61,14 @@ enum DisconnectReasons {
     "transport close",
     "transport error",
 }
-export type BFGame = "BF4" | "BF1";
+export enum BFGame {
+    "BF4",
+    "BF1",
+}
 export interface ServerData {
     "name":string | null,
     "guid":string | null,
+    "gameId":string | null;
     "user":string,
     "timestamp":number
 }

@@ -2,7 +2,7 @@
   "name": "bflauncher",
   "version": "1.0.0",
   "description": "",
-  "private":"true",
+  "private": "true",
   "bin": "client.js",
   "scripts": {
     "build": "npx tsc --project ./ && npx pkg . && npx tsc --build --clean ./",
